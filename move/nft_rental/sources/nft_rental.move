@@ -11,7 +11,6 @@ module nft_rental::rentables_ext {
     use sui::sui::SUI;
     use sui::transfer;
 
-
     // std imports
     use std::option::{Self, Option};
     // use std::debug::{Self};
@@ -22,7 +21,7 @@ module nft_rental::rentables_ext {
     const EExtensionNotInstalled: u64 = 0;
     const ENotOwner: u64 = 1;
     const ENotEnoughCoins: u64 = 2;
-    const EInvalidRenterKiosk: u64 = 3;
+    const EInvalidKiosk: u64 = 3;
     const ERentingPeriodNotOver: u64 = 4;
 
     // structs
@@ -33,7 +32,8 @@ module nft_rental::rentables_ext {
         duration: u64,
         start_date: Option<u64>,
         price_per_day: u64,
-        renter: address
+        renter: address,
+        borrower_kiosk: ID
     }
 
     struct Rentable< T: key + store> has store {
@@ -49,6 +49,9 @@ module nft_rental::rentables_ext {
         kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
     }
 
+    public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap) {
+        kiosk_extension::remove<Rentables>(kiosk, cap);
+    }
 
     public fun list<T: key + store>(
         kiosk: &mut Kiosk, 
@@ -97,10 +100,10 @@ module nft_rental::rentables_ext {
         assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
 
         let rentable = take_from_bag<T>(renter_kiosk, item);
-
+        
         let total_price = rentable.price_per_day*rentable.duration;
         let coin_value = coin::value(&coin);
-        assert!(coin_value == total_price, ENotEnoughCoins);
+        assert!(coin_value >= total_price, ENotEnoughCoins);
         
         transfer::public_transfer(coin, kiosk::owner(renter_kiosk));
         
@@ -110,8 +113,6 @@ module nft_rental::rentables_ext {
 
     public fun borrow<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID): &T {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
-        assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
-
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
         let rentable = bag::borrow<ID, Rentable<T>>(ext_storage_mut, id);
 
@@ -120,7 +121,7 @@ module nft_rental::rentables_ext {
 
     public fun borrow_val<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID): (T, Promise) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
-        assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
+        let borrower_kiosk = object::id(kiosk);
 
         let rentable = take_from_bag<T>(kiosk, id);
 
@@ -129,7 +130,8 @@ module nft_rental::rentables_ext {
             duration: rentable.duration,
             start_date: rentable.start_date,
             price_per_day: rentable.price_per_day,
-            renter: rentable.renter
+            renter: rentable.renter,
+            borrower_kiosk
         };
         
         let Rentable {            
@@ -144,13 +146,17 @@ module nft_rental::rentables_ext {
 
     public fun return_val<T: key + store>(kiosk: &mut Kiosk, object: T, promise: Promise) {
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
-        
+
         let Promise {    
             item_id,        
             duration,
             start_date,
             price_per_day,
-            renter} = promise;
+            renter,
+            borrower_kiosk} = promise;
+
+        let kiosk_id = object::id(kiosk);
+        assert!(kiosk_id == borrower_kiosk, EInvalidKiosk);
 
         let rentable = Rentable {
             object,
@@ -170,7 +176,6 @@ module nft_rental::rentables_ext {
         clock: &Clock,
         item: ID) {
         assert!(kiosk_extension::is_installed<Rentables>(renter_kiosk), EExtensionNotInstalled);
-        assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
 
         let rentable = take_from_bag<T>(borrower_kiosk, item);
 
@@ -180,13 +185,15 @@ module nft_rental::rentables_ext {
             start_date,
             price_per_day: _,
             renter: renter } = rentable;
-        
+
         let renter_kiosk_owner = kiosk::owner(renter_kiosk);
-        assert!(renter_kiosk_owner == renter, EInvalidRenterKiosk);
+        assert!(renter_kiosk_owner == renter, EInvalidKiosk);
 
         let start_date_u64 = *option::borrow(&start_date);
         let current_timestamp = clock::timestamp_ms(clock);
-        assert!(current_timestamp > start_date_u64 + duration, ERentingPeriodNotOver);
+        let final_timestamp = start_date_u64 + duration*86400;
+
+        assert!(current_timestamp > final_timestamp, ERentingPeriodNotOver);
 
         kiosk_extension::place<Rentables, T>(Rentables {}, renter_kiosk, object, policy);
     }
