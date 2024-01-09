@@ -25,8 +25,10 @@ module nft_rental::rentables_ext {
     const ERentingPeriodNotOver: u64 = 4;
 
     // structs
+    /// Extension Key for Kiosk Rentables extension.
     struct Rentables has drop {}
 
+    /// Promise struct for borrowing by value.
     struct Promise has store {
         item_id: ID,
         duration: u64,
@@ -36,6 +38,8 @@ module nft_rental::rentables_ext {
         borrower_kiosk: ID
     }
 
+    /// A wrapper object that holds an asset that is being rented. 
+    /// Contains information relevant to the rental period, cost and renter.
     struct Rentable< T: key + store> has store {
         object: T,
         duration: u64, // timestamp or epochs of total amount of time offered for renting
@@ -45,14 +49,20 @@ module nft_rental::rentables_ext {
     }
 
     // methods
+
+    /// Enables someone to install the Rentables extension in their Kiosk.
     public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext){
         kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
     }
 
+    /// Remove the extension from the Kiosk. Can only be performed by the owner,
+    /// The extension storage must be empty for the transaction to succeed.
     public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap) {
         kiosk_extension::remove<Rentables>(kiosk, cap);
     }
 
+    /// Enables someone to list an asset within the Rentables extension's Bag, 
+    /// creating a Bag entry with the asset's ID as the key and a Rentable wrapper object as the value.
     public fun list<T: key + store>(
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap, 
@@ -75,6 +85,7 @@ module nft_rental::rentables_ext {
         place_in_bag(kiosk, item_id, rentable);               
     }
 
+    /// Allows the renter to delist an item, that is not currently being rented.
     public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, item: ID): T {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
 
@@ -90,6 +101,8 @@ module nft_rental::rentables_ext {
         object
     }
 
+    /// This enables individuals to rent a listed Rentable. 
+    /// It permits anyone to borrow an item on behalf of another user, provided they have the Rentables extension installed.
     public fun rent<T: key + store>(
         renter_kiosk: &mut Kiosk, 
         borrower_kiosk: &mut Kiosk, 
@@ -111,6 +124,7 @@ module nft_rental::rentables_ext {
         place_in_bag(borrower_kiosk, item, rentable);      
     }
 
+    /// Enables the borrower to acquire the Rentable by reference from their bag.
     public fun borrow<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID): &T {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
@@ -119,6 +133,9 @@ module nft_rental::rentables_ext {
         &rentable.object
     }
 
+    /// Enables the borrower to temporarily acquire the Rentable with an agreement or promise to return it.
+    /// All the information about the Rentable is stored within the promise, 
+    /// facilitating the reconstruction of the Rentable when the object is returned.
     public fun borrow_val<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID): (T, Promise) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
         let borrower_kiosk = object::id(kiosk);
@@ -144,6 +161,7 @@ module nft_rental::rentables_ext {
         (object, promise)
     }
 
+    /// Enables the borrower to return the borrowed item.
     public fun return_val<T: key + store>(kiosk: &mut Kiosk, object: T, promise: Promise) {
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
 
@@ -169,6 +187,7 @@ module nft_rental::rentables_ext {
         place_in_bag(kiosk, item_id, rentable);
     }
 
+    /// Enables the owner to reclaim their asset once the rental period has concluded.
     public fun reclaim_rentable<T: key + store>(
         renter_kiosk: &mut Kiosk, 
         borrower_kiosk: &mut Kiosk, 
