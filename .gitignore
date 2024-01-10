@@ -1,0 +1,4 @@
+**/build
+.code-workspace
+.coverage_map.mvcov
+.trace
