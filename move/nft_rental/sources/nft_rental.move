@@ -42,7 +42,7 @@ module nft_rental::rentables_ext {
     /// Contains information relevant to the rental period, cost and renter.
     struct Rentable< T: key + store> has store {
         object: T,
-        duration: u64, // timestamp or epochs of total amount of time offered for renting
+        duration: u64, // total amount of time offered for renting in days
         start_date: Option<u64>, // initially undefined, is updated once someone rents it
         price_per_day: u64,
         renter: address
