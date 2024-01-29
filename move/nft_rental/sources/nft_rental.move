@@ -1,4 +1,7 @@
 module nft_rental::rentables_ext {
+    // std imports
+    use std::option::{Self, Option};
+
     // sui imports
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
     use sui::tx_context::TxContext;
@@ -13,7 +16,6 @@ module nft_rental::rentables_ext {
     use sui::package::{Publisher};
 
     // other imports
-    use std::option::{Self, Option};
     use kiosk::kiosk_lock_rule::{Rule};
 
     // consts
@@ -24,7 +26,6 @@ module nft_rental::rentables_ext {
     const ENotEnoughCoins: u64 = 2;
     const EInvalidKiosk: u64 = 3;
     const ERentingPeriodNotOver: u64 = 4;
-
 
     // ==================== Structs ====================
     
@@ -59,7 +60,6 @@ module nft_rental::rentables_ext {
         policy_cap: TransferPolicyCap<T>
     }
 
-
     // ==================== Methods ====================
 
     /// Mints and shares a ProtectedTP for type T.
@@ -79,7 +79,7 @@ module nft_rental::rentables_ext {
     }
 
     /// Enables someone to install the Rentables extension in their Kiosk.
-    public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext){
+    public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
         kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
     }
 
@@ -91,6 +91,7 @@ module nft_rental::rentables_ext {
 
     /// Enables someone to list an asset within the Rentables extension's Bag, 
     /// creating a Bag entry with the asset's ID as the key and a Rentable wrapper object as the value.
+    /// Does not require the item to be already placed in the Kiosk.
     public fun list<T: key + store>(
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap, 
@@ -113,6 +114,10 @@ module nft_rental::rentables_ext {
         place_in_bag(kiosk, item_id, rentable);               
     }
 
+    /// Enables someone to list an asset within the Rentables extension's Bag, 
+    /// creating a Bag entry with the asset's ID as the key and a Rentable wrapper object as the value.
+    /// Requires the existance of a ProtectedTP which can only be created by the creator of type T.
+    /// The difference between this method and list is that this one works on kiosk locked assets.
     public fun list_locked<T: key + store>(
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap,
@@ -121,7 +126,7 @@ module nft_rental::rentables_ext {
         duration: u64, 
         price_per_day: u64,
 		renter: address,
-        ctx: &mut TxContext){
+        ctx: &mut TxContext) {
         
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
@@ -140,12 +145,12 @@ module nft_rental::rentables_ext {
             start_date: option::none<u64>(),
             price_per_day,
             renter
-        };         
-
+        };
         place_in_bag(kiosk, item, rentable);            
     }
 
-    // Allows the renter to delist an item, that is not currently being rented.
+    /// Allows the renter to delist an item, that is not currently being rented.
+    /// Delists the item from the Rentables extension's Bag while respecting lock Rules if present.
     public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, transfer_policy: &TransferPolicy<T>, item: ID) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
 
@@ -156,7 +161,8 @@ module nft_rental::rentables_ext {
             duration: _,
             start_date: _,
             price_per_day: _,
-            renter: _ } = rentable;
+            renter: _ 
+        } = rentable;
 
         if (has_rule<T, Rule>(transfer_policy)) {
             kiosk::lock(kiosk, cap, transfer_policy, object);
@@ -173,7 +179,7 @@ module nft_rental::rentables_ext {
         borrower_kiosk: &mut Kiosk, 
         item: ID, 
 		coin: Coin<SUI>, 
-        clock: &Clock){
+        clock: &Clock) {
         
         assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
 
@@ -287,7 +293,8 @@ module nft_rental::rentables_ext {
         };
     }
 
-    // Helper methods
+    // ==================== Helper methods ====================
+
     fun take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) : Rentable<T> {
 
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
