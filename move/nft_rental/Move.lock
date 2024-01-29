@@ -2,8 +2,17 @@
 
 [move]
 version = 0
-manifest_digest = "DD75F0ACA3E25CB3AEDBF0B966EEA7B90ECA618440F610F7821E357F261B2C2B"
-deps_digest = "F8BBB0CCB2491CA29A3DF03D6F92277A4F3574266507ACD77214D37ECA3F3082"
+manifest_digest = "0B25FA3FC97271A221053CECDCC09530914A20055C642D892D5475050A22E338"
+deps_digest = "3C4103934B1E040BB6B23F1D610B4EF9F2F1166A50A104EADCF77467C004C600"
+
+dependencies = [
+  { name = "Kiosk" },
+  { name = "Sui" },
+]
+
+[[move.package]]
+name = "Kiosk"
+source = { git = "https://github.com/MystenLabs/apps.git", rev = "testnet", subdir = "kiosk" }
 
 dependencies = [
   { name = "Sui" },
@@ -11,12 +20,17 @@ dependencies = [
 
 [[move.package]]
 name = "MoveStdlib"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/move-stdlib" }
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "testnet", subdir = "crates/sui-framework/packages/move-stdlib" }
 
 [[move.package]]
 name = "Sui"
-source = { git = "https://github.com/MystenLabs/sui.git", rev = "framework/testnet", subdir = "crates/sui-framework/packages/sui-framework" }
+source = { git = "https://github.com/MystenLabs/sui.git", rev = "testnet", subdir = "crates/sui-framework/packages/sui-framework" }
 
 dependencies = [
   { name = "MoveStdlib" },
 ]
+
+[move.toolchain-version]
+compiler-version = "1.17.0"
+edition = "legacy"
+flavor = "sui"
