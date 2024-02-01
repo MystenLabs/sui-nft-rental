@@ -1,3 +1,8 @@
+// Copyright (c) Mysten Labs, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+/// This module facilitates the rental of NFTs using kiosks. 
+/// It allows users to list their NFTs for renting, rent NFTs for a specified duration, and return them after the rental period.
 module nft_rental::rentables_ext {
     // std imports
     use std::option::{Self, Option};
@@ -36,7 +41,7 @@ module nft_rental::rentables_ext {
     struct Promise has store {
         item_id: ID,
         duration: u64,
-        start_date: Option<u64>,
+        start_date: u64,
         price_per_day: u64,
         renter: address,
         borrower_kiosk: ID
@@ -216,7 +221,7 @@ module nft_rental::rentables_ext {
         let promise = Promise {
             item_id: id,
             duration: rentable.duration,
-            start_date: rentable.start_date,
+            start_date: *option::borrow(&rentable.start_date),
             price_per_day: rentable.price_per_day,
             renter: rentable.renter,
             borrower_kiosk
@@ -247,10 +252,13 @@ module nft_rental::rentables_ext {
         let kiosk_id = object::id(kiosk);
         assert!(kiosk_id == borrower_kiosk, EInvalidKiosk);
 
+        let start_date_option = option::none();
+        option::fill(&mut start_date_option, start_date);
+
         let rentable = Rentable {
             object,
             duration,
-            start_date,
+            start_date: start_date_option,
             price_per_day,
             renter
         };
