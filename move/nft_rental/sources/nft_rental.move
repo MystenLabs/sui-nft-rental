@@ -1,5 +1,8 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+/// This module facilitates the rental of NFTs using kiosks. 
+/// It allows users to list their NFTs for renting, rent NFTs for a specified duration, and return them after the rental period.
 module nft_rental::rentables_ext {
     // std imports
     use std::option::{Self, Option};
