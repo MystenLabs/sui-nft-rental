@@ -9,13 +9,14 @@ module nft_rental::rentables_ext {
 
     // sui imports
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
-    use sui::tx_context::{Self, TxContext};
-    use sui::kiosk_extension::{Self};
+    use sui::tx_context::{TxContext};
+    use sui::kiosk_extension;
     use sui::bag;
     use sui::object::{Self, UID, ID};
     use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap, has_rule};
     use sui::clock::{Self, Clock};
     use sui::coin::{Self, Coin};
+    use sui::balance::{Self, Balance};
     use sui::sui::SUI;
     use sui::transfer;
     use sui::package::{Publisher};
@@ -32,8 +33,11 @@ module nft_rental::rentables_ext {
     const EInvalidKiosk: u64 = 3;
     const ERentingPeriodNotOver: u64 = 4;
     const EObjectNotExists: u64 = 5;
+    const EExceedsMaxValue: u64 = 6;
 
-    const secondsInADay = 86400;
+    const SECONDS_IN_A_DAY: u64 = 86400;
+    const BASIS_POINT_RECIPROCAL: u64 = 10000;
+    const MAX_VALUE_U64: u64 = 18446744073709551605;
 
     // ==================== Structs ====================
     
@@ -46,7 +50,7 @@ module nft_rental::rentables_ext {
         duration: u64,
         start_date: u64,
         price_per_day: u64,
-        renter: address,
+        renter_kiosk: ID,
         borrower_kiosk: ID
     }
 
@@ -57,10 +61,19 @@ module nft_rental::rentables_ext {
         duration: u64, // total amount of time offered for renting in days
         start_date: Option<u64>, // initially undefined, is updated once someone rents it
         price_per_day: u64,
-        renter: address
+        kiosk_id: ID // the kiosk id that the object was taken from
     }
 
     /// A shared object that should be minted by every creator. 
+    /// Defines the royalties the creator will receive from each rent invocation. 
+    struct RentalPolicy<phantom T> has key, store {
+        id: UID,
+        balance: Balance<SUI>,
+        amount_bp: u64
+    }
+
+    /// A shared object that should be minted by every creator. 
+    /// Even for creators that do not wish to enforce royalties.
     /// Provides authorized access to an empty TransferPolicy. 
     struct ProtectedTP<phantom T> has key, store {
         id: UID,
@@ -70,8 +83,9 @@ module nft_rental::rentables_ext {
 
     // ==================== Methods ====================
 
-    /// Mints and shares a ProtectedTP for type T.
-    public fun create_protected_tp<T>(publisher: &Publisher, ctx: &mut TxContext) {        
+    /// Mints and shares a ProtectedTP & a RentalPolicy object for type T. 
+    /// Can only be performed by the publisher of type T.
+    public fun setup_renting<T: drop>(publisher: &Publisher, amount_bp: u64, ctx: &mut TxContext) {        
         // Creates an empty TP and shares a ProtectedTP<T> object.
         // This can be used to bypass the lock rule under specific conditions.
         // Storing inside the cap the ProtectedTP with no way to access it
@@ -83,7 +97,15 @@ module nft_rental::rentables_ext {
             transfer_policy,
             policy_cap
         };
+
+        let rental_policy = RentalPolicy<T> {
+            id: object::new(ctx),
+            balance: balance::zero<SUI>(),
+            amount_bp
+        };
+
         transfer::share_object(protected_tp);
+        transfer::share_object(rental_policy);
     }
 
     /// Enables someone to install the Rentables extension in their Kiosk.
@@ -99,34 +121,9 @@ module nft_rental::rentables_ext {
 
     /// Enables someone to list an asset within the Rentables extension's Bag, 
     /// creating a Bag entry with the asset's ID as the key and a Rentable wrapper object as the value.
-    /// Does not require the item to be already placed in the Kiosk.
-    public fun list<T: key + store>(
-        kiosk: &mut Kiosk, 
-        cap: &KioskOwnerCap, 
-        item: T,
-		duration: u64, 
-        price_per_day: u64,
-        ctx: &mut TxContext) {
-        
-        assert!(kiosk::has_access(kiosk, cap), ENotOwner);
-        assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
-
-        let item_id = object::id<T>(&item);
-        let rentable = Rentable {
-            object: item,
-            duration,
-            start_date: option::none<u64>(),
-            price_per_day,
-            renter: tx_context::sender(ctx)
-        };         
-        place_in_bag(kiosk, item_id, rentable);               
-    }
-
-    /// Enables someone to list an asset within the Rentables extension's Bag, 
-    /// creating a Bag entry with the asset's ID as the key and a Rentable wrapper object as the value.
     /// Requires the existance of a ProtectedTP which can only be created by the creator of type T.
-    /// The difference between this method and list is that this one works on kiosk locked assets.
-    public fun list_locked<T: key + store>(
+    /// Assumes item is already placed (& optionally locked) in a Kiosk.
+    public fun list<T: key + store>(
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap,
         protected_tp: &ProtectedTP<T>, 
@@ -135,10 +132,10 @@ module nft_rental::rentables_ext {
         price_per_day: u64,
         ctx: &mut TxContext) {
         
-        assert!(kiosk::has_access(kiosk, cap), ENotOwner);
+        kiosk::set_owner(kiosk, cap, ctx);
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
 
-        // kiosk::list<T>(kiosk, cap, item, 0);
+        kiosk::list<T>(kiosk, cap, item, 0);
         let coin = coin::zero<SUI>(ctx);
         let (object, request) = kiosk::purchase<T>(kiosk, item, coin);
 
@@ -149,13 +146,14 @@ module nft_rental::rentables_ext {
             duration,
             start_date: option::none<u64>(),
             price_per_day,
-            renter: tx_context::sender(ctx)
+            kiosk_id: object::id(kiosk)
         };
         place_in_bag(kiosk, item, rentable);            
     }
 
     /// Allows the renter to delist an item, that is not currently being rented.
-    /// Delists the item from the Rentables extension's Bag while respecting lock Rules if present.
+    /// Places (or locks, if a lock rule is present) the object back to owner's Kiosk. 
+    /// Creators should mint an empty TransferPolicy even if they don't want to apply any royalties.
     public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, transfer_policy: &TransferPolicy<T>, item: ID, _ctx: &mut TxContext) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
 
@@ -166,7 +164,7 @@ module nft_rental::rentables_ext {
             duration: _,
             start_date: _,
             price_per_day: _,
-            renter: _ 
+            kiosk_id: _
         } = rentable;
 
         if (has_rule<T, Rule>(transfer_policy)) {
@@ -179,23 +177,31 @@ module nft_rental::rentables_ext {
 
     /// This enables individuals to rent a listed Rentable. 
     /// It permits anyone to borrow an item on behalf of another user, provided they have the Rentables extension installed.
+    /// The Rental Policy defines the portion of the coin that will be retained as fees and added to the Rental Policy's balance.
     public fun rent<T: key + store>(
         renter_kiosk: &mut Kiosk, 
         borrower_kiosk: &mut Kiosk, 
+        rental_policy: &mut RentalPolicy<T>,
         item: ID, 
 		coin: Coin<SUI>, 
         clock: &Clock,
-        _ctx: &mut TxContext) {
+        ctx: &mut TxContext) {
         
         assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
 
         let rentable = take_from_bag<T>(renter_kiosk, item);
         
         let total_price = rentable.price_per_day*rentable.duration;
+        assert!(total_price <= MAX_VALUE_U64, EExceedsMaxValue);
+
         let coin_value = coin::value(&coin);
         assert!(coin_value == total_price, ENotEnoughCoins);
         
-        transfer::public_transfer(coin, rentable.renter);
+        let fees_amount = (coin_value*rental_policy.amount_bp)/BASIS_POINT_RECIPROCAL;
+        let fees = coin::split<SUI>(&mut coin, fees_amount, ctx);
+
+        coin::put(&mut rental_policy.balance, fees);
+        transfer::public_transfer(coin, kiosk::owner(renter_kiosk));
         
         option::fill(&mut rentable.start_date, clock::timestamp_ms(clock));
         place_in_bag(borrower_kiosk, item, rentable);      
@@ -224,7 +230,7 @@ module nft_rental::rentables_ext {
             duration: rentable.duration,
             start_date: *option::borrow(&rentable.start_date),
             price_per_day: rentable.price_per_day,
-            renter: rentable.renter,
+            renter_kiosk: rentable.kiosk_id,
             borrower_kiosk
         };
         
@@ -233,7 +239,7 @@ module nft_rental::rentables_ext {
             duration: _,
             start_date: _,
             price_per_day: _,
-            renter: _ } = rentable;
+            kiosk_id: _} = rentable;
 
         (object, promise)
     }
@@ -247,7 +253,7 @@ module nft_rental::rentables_ext {
             duration,
             start_date,
             price_per_day,
-            renter,
+            renter_kiosk,
             borrower_kiosk} = promise;
 
         let kiosk_id = object::id(kiosk);
@@ -258,7 +264,7 @@ module nft_rental::rentables_ext {
             duration,
             start_date: option::some(start_date),
             price_per_day,
-            renter
+            kiosk_id: renter_kiosk
         };
 
         place_in_bag(kiosk, item_id, rentable);
@@ -281,15 +287,13 @@ module nft_rental::rentables_ext {
             duration,
             start_date,
             price_per_day: _,
-            renter: renter } = rentable;
+            kiosk_id } = rentable;
 
-        // HERE!
-        let renter_kiosk_owner = kiosk::owner(renter_kiosk);
-        assert!(renter_kiosk == renter, EInvalidKiosk);
+        assert!(object::id(renter_kiosk) == kiosk_id, EInvalidKiosk);
 
         let start_date_u64 = *option::borrow(&start_date);
         let current_timestamp = clock::timestamp_ms(clock);
-        let final_timestamp = start_date_u64 + duration*secondsInADay;
+        let final_timestamp = start_date_u64 + duration*SECONDS_IN_A_DAY;
 
         assert!(current_timestamp > final_timestamp, ERentingPeriodNotOver);
 
