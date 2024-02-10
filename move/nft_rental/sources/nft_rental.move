@@ -32,8 +32,8 @@ module nft_rental::rentables_ext {
     const ENotEnoughCoins: u64 = 2;
     const EInvalidKiosk: u64 = 3;
     const ERentingPeriodNotOver: u64 = 4;
-    const EObjectNotExists: u64 = 5;
-    const EExceedsMaxValue: u64 = 6;
+    const EObjectNotExist: u64 = 5;
+    const ETotalPriceOverflow: u64 = 6;
 
     const SECONDS_IN_A_DAY: u64 = 86400;
     const BASIS_POINT_RECIPROCAL: u64 = 10000;
@@ -83,9 +83,20 @@ module nft_rental::rentables_ext {
 
     // ==================== Methods ====================
 
+    /// Enables someone to install the Rentables extension in their Kiosk.
+    public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
+        kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
+    }
+
+    /// Remove the extension from the Kiosk. Can only be performed by the owner,
+    /// The extension storage must be empty for the transaction to succeed.
+    public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap, _ctx: &mut TxContext) {
+        kiosk_extension::remove<Rentables>(kiosk, cap);
+    }
+
     /// Mints and shares a ProtectedTP & a RentalPolicy object for type T. 
     /// Can only be performed by the publisher of type T.
-    public fun setup_renting<T: drop>(publisher: &Publisher, amount_bp: u64, ctx: &mut TxContext) {        
+    public fun setup_renting<T>(publisher: &Publisher, amount_bp: u64, ctx: &mut TxContext) {        
         // Creates an empty TP and shares a ProtectedTP<T> object.
         // This can be used to bypass the lock rule under specific conditions.
         // Storing inside the cap the ProtectedTP with no way to access it
@@ -106,17 +117,6 @@ module nft_rental::rentables_ext {
 
         transfer::share_object(protected_tp);
         transfer::share_object(rental_policy);
-    }
-
-    /// Enables someone to install the Rentables extension in their Kiosk.
-    public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
-        kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
-    }
-
-    /// Remove the extension from the Kiosk. Can only be performed by the owner,
-    /// The extension storage must be empty for the transaction to succeed.
-    public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap, _ctx: &mut TxContext) {
-        kiosk_extension::remove<Rentables>(kiosk, cap);
     }
 
     /// Enables someone to list an asset within the Rentables extension's Bag, 
@@ -191,8 +191,9 @@ module nft_rental::rentables_ext {
 
         let rentable = take_from_bag<T>(renter_kiosk, item);
         
+        let max_price = MAX_VALUE_U64/rentable.duration;
+        assert!(rentable.price_per_day <= max_price, ETotalPriceOverflow);
         let total_price = rentable.price_per_day*rentable.duration;
-        assert!(total_price <= MAX_VALUE_U64, EExceedsMaxValue);
 
         let coin_value = coin::value(&coin);
         assert!(coin_value == total_price, ENotEnoughCoins);
@@ -311,7 +312,7 @@ module nft_rental::rentables_ext {
 
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
 
-        assert!(bag::contains(ext_storage_mut, item_id), EObjectNotExists);
+        assert!(bag::contains(ext_storage_mut, item_id), EObjectNotExist);
 
         let rentable = bag::remove<ID, Rentable<T>>(
             ext_storage_mut,
@@ -324,5 +325,20 @@ module nft_rental::rentables_ext {
     fun place_in_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID, rentable: Rentable<T>) {
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
         bag::add(ext_storage_mut, item_id, rentable);        
+    }
+
+    #[test_only]
+    public fun test_take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) {
+        let rentable = take_from_bag<T>(kiosk, item_id);
+
+        let Rentable {            
+                object,
+                duration: _,
+                start_date: _,
+                price_per_day: _,
+                kiosk_id: _
+            } = rentable;
+
+        transfer::public_share_object(object);
     }
 }
