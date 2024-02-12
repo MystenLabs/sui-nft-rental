@@ -4,6 +4,7 @@
 /// This module facilitates the rental of NFTs using kiosks. 
 /// It allows users to list their NFTs for renting, rent NFTs for a specified duration, and return them after the rental period.
 module nft_rental::rentables_ext {
+    // === Imports ===
     // std imports
     use std::option::{Self, Option};
 
@@ -21,12 +22,10 @@ module nft_rental::rentables_ext {
     use sui::transfer;
     use sui::package::{Publisher};
 
-    // other imports
+    // Other imports
     use kiosk::kiosk_lock_rule::{Rule};
 
-    // consts
-    const PERMISSIONS: u128 = 11;
-
+    // === Errors ===
     const EExtensionNotInstalled: u64 = 0;
     const ENotOwner: u64 = 1;
     const ENotEnoughCoins: u64 = 2;
@@ -35,11 +34,13 @@ module nft_rental::rentables_ext {
     const EObjectNotExist: u64 = 5;
     const ETotalPriceOverflow: u64 = 6;
 
+    // === Constants ===
+    const PERMISSIONS: u128 = 11;
     const SECONDS_IN_A_DAY: u64 = 86400;
-    const BASIS_POINT_RECIPROCAL: u64 = 10000;
+    const MAX_BASIS_POINTS: u128 = 10_000;
     const MAX_VALUE_U64: u64 = 18446744073709551605;
 
-    // ==================== Structs ====================
+    // === Structs ===
     
     /// Extension Key for Kiosk Rentables extension.
     struct Rentables has drop {}
@@ -81,7 +82,7 @@ module nft_rental::rentables_ext {
         policy_cap: TransferPolicyCap<T>
     }
 
-    // ==================== Methods ====================
+    // === Public-Mutative Functions ===
 
     /// Enables someone to install the Rentables extension in their Kiosk.
     public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
@@ -126,9 +127,9 @@ module nft_rental::rentables_ext {
     public fun list<T: key + store>(
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap,
-        protected_tp: &ProtectedTP<T>, 
-        item: ID, 
-        duration: u64, 
+        protected_tp: &ProtectedTP<T>,
+        item: ID,
+        duration: u64,
         price_per_day: u64,
         ctx: &mut TxContext) {
         
@@ -159,7 +160,7 @@ module nft_rental::rentables_ext {
 
         let rentable = take_from_bag<T>(kiosk, item);
         
-        let Rentable {            
+        let Rentable {
             object,
             duration: _,
             start_date: _,
@@ -191,14 +192,14 @@ module nft_rental::rentables_ext {
 
         let rentable = take_from_bag<T>(renter_kiosk, item);
         
-        let max_price = MAX_VALUE_U64/rentable.duration;
-        assert!(rentable.price_per_day <= max_price, ETotalPriceOverflow);
-        let total_price = rentable.price_per_day*rentable.duration;
+        let max_price_per_day = MAX_VALUE_U64 / rentable.duration;
+        assert!(rentable.price_per_day <= max_price_per_day, ETotalPriceOverflow);
+        let total_price = rentable.price_per_day * rentable.duration;
 
         let coin_value = coin::value(&coin);
         assert!(coin_value == total_price, ENotEnoughCoins);
         
-        let fees_amount = (coin_value*rental_policy.amount_bp)/BASIS_POINT_RECIPROCAL;
+        let fees_amount = (((coin_value as u128) * (rental_policy.amount_bp as u128) / MAX_BASIS_POINTS) as u64);
         let fees = coin::split<SUI>(&mut coin, fees_amount, ctx);
 
         coin::put(&mut rental_policy.balance, fees);
@@ -235,7 +236,7 @@ module nft_rental::rentables_ext {
             borrower_kiosk
         };
         
-        let Rentable {            
+        let Rentable {
             object,
             duration: _,
             start_date: _,
@@ -272,7 +273,7 @@ module nft_rental::rentables_ext {
     }
 
     /// Enables the owner to reclaim their asset once the rental period has concluded.
-    public fun reclaim_rentable<T: key + store>(
+    public fun reclaim<T: key + store>(
         renter_kiosk: &mut Kiosk, 
         borrower_kiosk: &mut Kiosk, 
         transfer_policy: &TransferPolicy<T>, 
@@ -306,7 +307,7 @@ module nft_rental::rentables_ext {
         };
     }
 
-    // ==================== Helper methods ====================
+    // === Private Functions ===
 
     fun take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) : Rentable<T> {
 
@@ -326,6 +327,8 @@ module nft_rental::rentables_ext {
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
         bag::add(ext_storage_mut, item_id, rentable);        
     }
+
+    // === Test Functions ===
 
     #[test_only]
     public fun test_take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) {

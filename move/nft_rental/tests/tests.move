@@ -1067,7 +1067,7 @@ module nft_rental::tests {
 
             clock::increment_for_testing(clock, tick);
 
-            rentables_ext::reclaim_rentable<T>(&mut renter_kiosk, &mut borrower_kiosk, &policy, clock, item_id, test_scenario::ctx(scenario));
+            rentables_ext::reclaim<T>(&mut renter_kiosk, &mut borrower_kiosk, &policy, clock, item_id, test_scenario::ctx(scenario));
 
             test_scenario::return_to_sender(scenario, policy);
             test_scenario::return_shared(borrower_kiosk);
