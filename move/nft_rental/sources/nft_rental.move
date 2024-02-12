@@ -82,7 +82,7 @@ module nft_rental::rentables_ext {
         policy_cap: TransferPolicyCap<T>
     }
 
-    // === Public-Mutative Functions ===
+    // === Public Functions ===
 
     /// Enables someone to install the Rentables extension in their Kiosk.
     public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
