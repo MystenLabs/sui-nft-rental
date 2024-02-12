@@ -180,11 +180,11 @@ module nft_rental::rentables_ext {
     /// It permits anyone to borrow an item on behalf of another user, provided they have the Rentables extension installed.
     /// The Rental Policy defines the portion of the coin that will be retained as fees and added to the Rental Policy's balance.
     public fun rent<T: key + store>(
-        renter_kiosk: &mut Kiosk, 
-        borrower_kiosk: &mut Kiosk, 
+        renter_kiosk: &mut Kiosk,
+        borrower_kiosk: &mut Kiosk,
         rental_policy: &mut RentalPolicy<T>,
-        item: ID, 
-		coin: Coin<SUI>, 
+        item: ID,
+        coin: Coin<SUI>,
         clock: &Clock,
         ctx: &mut TxContext) {
         
