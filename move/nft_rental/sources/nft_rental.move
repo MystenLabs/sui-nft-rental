@@ -45,6 +45,14 @@ module nft_rental::rentables_ext {
     /// Extension Key for Kiosk Rentables extension.
     struct Rentables has drop {}
 
+    // Struct representing a rented item.
+    // Used as a key for the Rentable that's placed in the Extension's Bag.
+    struct Rented has store, copy, drop { id: ID }
+
+    // Struct representing a listed item. 
+    // Used as a key for the Rentable that's placed in the Extension's Bag.
+    struct Listed has store, copy, drop { id: ID }
+
     /// Promise struct for borrowing by value.
     struct Promise has store {
         item: Rented,
@@ -65,21 +73,15 @@ module nft_rental::rentables_ext {
         kiosk_id: ID // the kiosk id that the object was taken from
     }
 
-    // Struct representing a rented item. Includes only the ID of the object.
-    struct Rented has store, copy, drop { id: ID }
-
-    // Struct representing a listed item. Includes only the ID of the object.
-    struct Listed has store, copy, drop { id: ID }
-
     /// A shared object that should be minted by every creator. 
     /// Defines the royalties the creator will receive from each rent invocation. 
     struct RentalPolicy<phantom T> has key, store {
         id: UID,
         balance: Balance<SUI>,
         /// Note: Move does not support float numbers. 
-        /// If you need to represent a float, tou need to determine the desired precision and use a larger integer representation.
+        /// If you need to represent a float, you need to determine the desired precision and use a larger integer representation.
         /// For example, percentages can be represented using basis points:
-        /// 10000 basis points represents 100% and 100 basis points represents 1%.
+        /// 10000 basis points represent 100% and 100 basis points represent 1%.
         amount_bp: u64
     }
 
@@ -166,7 +168,14 @@ module nft_rental::rentables_ext {
     /// Allows the renter to delist an item, that is not currently being rented.
     /// Places (or locks, if a lock rule is present) the object back to owner's Kiosk. 
     /// Creators should mint an empty TransferPolicy even if they don't want to apply any royalties.
-    public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, transfer_policy: &TransferPolicy<T>, item_id: ID, _ctx: &mut TxContext) {
+    /// If they wish at some point to enforce royalties, they can update the existing TransferPolicy.
+    public fun delist<T: key + store>(
+        kiosk: &mut Kiosk,
+        cap: &KioskOwnerCap,
+        transfer_policy: &TransferPolicy<T>,
+        item_id: ID,
+        _ctx: &mut TxContext) {
+        
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
 
         let rentable = take_from_bag<T, Listed>(kiosk, Listed { id: item_id });
@@ -322,8 +331,7 @@ module nft_rental::rentables_ext {
 
     // === Private Functions ===
 
-    // fun take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) : Rentable<T> {
-        fun take_from_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key) : Rentable<T> {
+    fun take_from_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key) : Rentable<T> {
 
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
 
@@ -337,7 +345,6 @@ module nft_rental::rentables_ext {
         rentable
     }
 
-    // fun place_in_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID, rentable: Rentable<T>) {
     fun place_in_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key, rentable: Rentable<T>) {
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
         bag::add(ext_storage_mut, item, rentable);        
