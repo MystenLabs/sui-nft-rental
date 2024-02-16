@@ -10,7 +10,7 @@ module nft_rental::rentables_ext {
 
     // sui imports
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
-    use sui::tx_context::{TxContext};
+    use sui::tx_context::TxContext;
     use sui::kiosk_extension;
     use sui::bag;
     use sui::object::{Self, UID, ID};
@@ -20,10 +20,10 @@ module nft_rental::rentables_ext {
     use sui::balance::{Self, Balance};
     use sui::sui::SUI;
     use sui::transfer;
-    use sui::package::{Publisher};
+    use sui::package::Publisher;
 
     // Other imports
-    use kiosk::kiosk_lock_rule::{Rule};
+    use kiosk::kiosk_lock_rule::Rule as LockRule;
 
     // === Errors ===
     const EExtensionNotInstalled: u64 = 0;
@@ -37,8 +37,8 @@ module nft_rental::rentables_ext {
     // === Constants ===
     const PERMISSIONS: u128 = 11;
     const SECONDS_IN_A_DAY: u64 = 86400;
-    const MAX_BASIS_POINTS: u128 = 10_000;
-    const MAX_VALUE_U64: u64 = 18446744073709551605;
+    const MAX_BASIS_POINTS: u16 = 10_000;
+    const MAX_VALUE_U64: u64 = 0xff_ff_ff_ff__ff_ff_ff_ff;
 
     // === Structs ===
     
@@ -47,7 +47,7 @@ module nft_rental::rentables_ext {
 
     /// Promise struct for borrowing by value.
     struct Promise has store {
-        item_id: ID,
+        item: Rented,
         duration: u64,
         start_date: u64,
         price_per_day: u64,
@@ -65,11 +65,21 @@ module nft_rental::rentables_ext {
         kiosk_id: ID // the kiosk id that the object was taken from
     }
 
+    // Struct representing a rented item. Includes only the ID of the object.
+    struct Rented has store, copy, drop { id: ID }
+
+    // Struct representing a listed item. Includes only the ID of the object.
+    struct Listed has store, copy, drop { id: ID }
+
     /// A shared object that should be minted by every creator. 
     /// Defines the royalties the creator will receive from each rent invocation. 
     struct RentalPolicy<phantom T> has key, store {
         id: UID,
         balance: Balance<SUI>,
+        /// Note: Move does not support float numbers. 
+        /// If you need to represent a float, tou need to determine the desired precision and use a larger integer representation.
+        /// For example, percentages can be represented using basis points:
+        /// 10000 basis points represents 100% and 100 basis points represents 1%.
         amount_bp: u64
     }
 
@@ -128,7 +138,7 @@ module nft_rental::rentables_ext {
         kiosk: &mut Kiosk, 
         cap: &KioskOwnerCap,
         protected_tp: &ProtectedTP<T>,
-        item: ID,
+        item_id: ID,
         duration: u64,
         price_per_day: u64,
         ctx: &mut TxContext) {
@@ -136,9 +146,9 @@ module nft_rental::rentables_ext {
         kiosk::set_owner(kiosk, cap, ctx);
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
 
-        kiosk::list<T>(kiosk, cap, item, 0);
+        kiosk::list<T>(kiosk, cap, item_id, 0);
         let coin = coin::zero<SUI>(ctx);
-        let (object, request) = kiosk::purchase<T>(kiosk, item, coin);
+        let (object, request) = kiosk::purchase<T>(kiosk, item_id, coin);
 
         let (_item, _paid, _from) = transfer_policy::confirm_request(&protected_tp.transfer_policy, request);
 
@@ -149,16 +159,17 @@ module nft_rental::rentables_ext {
             price_per_day,
             kiosk_id: object::id(kiosk)
         };
-        place_in_bag(kiosk, item, rentable);            
+
+        place_in_bag<T, Listed>(kiosk, Listed { id: item_id }, rentable);
     }
 
     /// Allows the renter to delist an item, that is not currently being rented.
     /// Places (or locks, if a lock rule is present) the object back to owner's Kiosk. 
     /// Creators should mint an empty TransferPolicy even if they don't want to apply any royalties.
-    public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, transfer_policy: &TransferPolicy<T>, item: ID, _ctx: &mut TxContext) {
+    public fun delist<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, transfer_policy: &TransferPolicy<T>, item_id: ID, _ctx: &mut TxContext) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
 
-        let rentable = take_from_bag<T>(kiosk, item);
+        let rentable = take_from_bag<T, Listed>(kiosk, Listed { id: item_id });
         
         let Rentable {
             object,
@@ -168,7 +179,7 @@ module nft_rental::rentables_ext {
             kiosk_id: _
         } = rentable;
 
-        if (has_rule<T, Rule>(transfer_policy)) {
+        if (has_rule<T, LockRule>(transfer_policy)) {
             kiosk::lock(kiosk, cap, transfer_policy, object);
         }
         else {
@@ -183,14 +194,14 @@ module nft_rental::rentables_ext {
         renter_kiosk: &mut Kiosk,
         borrower_kiosk: &mut Kiosk,
         rental_policy: &mut RentalPolicy<T>,
-        item: ID,
+        item_id: ID,
         coin: Coin<SUI>,
         clock: &Clock,
         ctx: &mut TxContext) {
         
         assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
 
-        let rentable = take_from_bag<T>(renter_kiosk, item);
+        let rentable = take_from_bag<T, Listed>(renter_kiosk, Listed { id: item_id });
         
         let max_price_per_day = MAX_VALUE_U64 / rentable.duration;
         assert!(rentable.price_per_day <= max_price_per_day, ETotalPriceOverflow);
@@ -199,21 +210,23 @@ module nft_rental::rentables_ext {
         let coin_value = coin::value(&coin);
         assert!(coin_value == total_price, ENotEnoughCoins);
         
-        let fees_amount = (((coin_value as u128) * (rental_policy.amount_bp as u128) / MAX_BASIS_POINTS) as u64);
+        // Calculate fees_amount using the given basis points amount (percentage), ensuring the result fits into a 64-bit unsigned integer.
+        let fees_amount = (((coin_value as u128) * (rental_policy.amount_bp as u128) / (MAX_BASIS_POINTS as u128)) as u64);
         let fees = coin::split<SUI>(&mut coin, fees_amount, ctx);
 
         coin::put(&mut rental_policy.balance, fees);
         transfer::public_transfer(coin, kiosk::owner(renter_kiosk));
         
         option::fill(&mut rentable.start_date, clock::timestamp_ms(clock));
-        place_in_bag(borrower_kiosk, item, rentable);      
+        
+        place_in_bag<T, Rented>(borrower_kiosk, Rented { id: item_id }, rentable);         
     }
 
     /// Enables the borrower to acquire the Rentable by reference from their bag.
-    public fun borrow<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID, _ctx: &mut TxContext): &T {
+    public fun borrow<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, item_id: ID, _ctx: &mut TxContext): &T {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
-        let rentable = bag::borrow<ID, Rentable<T>>(ext_storage_mut, id);
+        let rentable = bag::borrow<Rented, Rentable<T>>(ext_storage_mut, Rented { id: item_id });
 
         &rentable.object
     }
@@ -221,14 +234,14 @@ module nft_rental::rentables_ext {
     /// Enables the borrower to temporarily acquire the Rentable with an agreement or promise to return it.
     /// All the information about the Rentable is stored within the promise, 
     /// facilitating the reconstruction of the Rentable when the object is returned.
-    public fun borrow_val<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, id: ID, _ctx: &mut TxContext): (T, Promise) {
+    public fun borrow_val<T: key + store>(kiosk: &mut Kiosk, cap: &KioskOwnerCap, item_id: ID, _ctx: &mut TxContext): (T, Promise) {
         assert!(kiosk::has_access(kiosk, cap), ENotOwner);
         let borrower_kiosk = object::id(kiosk);
 
-        let rentable = take_from_bag<T>(kiosk, id);
+        let rentable = take_from_bag<T, Rented>(kiosk, Rented { id: item_id });
 
         let promise = Promise {
-            item_id: id,
+            item: Rented { id: item_id },
             duration: rentable.duration,
             start_date: *option::borrow(&rentable.start_date),
             price_per_day: rentable.price_per_day,
@@ -251,7 +264,7 @@ module nft_rental::rentables_ext {
         assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
 
         let Promise {    
-            item_id,        
+            item,        
             duration,
             start_date,
             price_per_day,
@@ -269,7 +282,7 @@ module nft_rental::rentables_ext {
             kiosk_id: renter_kiosk
         };
 
-        place_in_bag(kiosk, item_id, rentable);
+        place_in_bag(kiosk, item, rentable);
     }
 
     /// Enables the owner to reclaim their asset once the rental period has concluded.
@@ -278,11 +291,11 @@ module nft_rental::rentables_ext {
         borrower_kiosk: &mut Kiosk, 
         transfer_policy: &TransferPolicy<T>, 
         clock: &Clock,
-        item: ID,
+        item_id: ID,
         _ctx: &mut TxContext) {
         assert!(kiosk_extension::is_installed<Rentables>(renter_kiosk), EExtensionNotInstalled);
 
-        let rentable = take_from_bag<T>(borrower_kiosk, item);
+        let rentable = take_from_bag<T, Rented>(borrower_kiosk, Rented { id: item_id });
 
         let Rentable {            
             object,
@@ -299,7 +312,7 @@ module nft_rental::rentables_ext {
 
         assert!(current_timestamp > final_timestamp, ERentingPeriodNotOver);
 
-        if (has_rule<T, Rule>(transfer_policy)) {
+        if (has_rule<T, LockRule>(transfer_policy)) {
             kiosk_extension::lock<Rentables, T>(Rentables {}, renter_kiosk, object, transfer_policy);
         }
         else {
@@ -309,30 +322,33 @@ module nft_rental::rentables_ext {
 
     // === Private Functions ===
 
-    fun take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) : Rentable<T> {
+    // fun take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) : Rentable<T> {
+        fun take_from_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key) : Rentable<T> {
 
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
 
-        assert!(bag::contains(ext_storage_mut, item_id), EObjectNotExist);
+        assert!(bag::contains(ext_storage_mut, item), EObjectNotExist);
 
-        let rentable = bag::remove<ID, Rentable<T>>(
+        let rentable = bag::remove<Key, Rentable<T>>(
             ext_storage_mut,
-            item_id
+            item
         );
 
         rentable
     }
 
-    fun place_in_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID, rentable: Rentable<T>) {
+    // fun place_in_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID, rentable: Rentable<T>) {
+    fun place_in_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key, rentable: Rentable<T>) {
         let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
-        bag::add(ext_storage_mut, item_id, rentable);        
+        bag::add(ext_storage_mut, item, rentable);        
     }
 
     // === Test Functions ===
 
     #[test_only]
-    public fun test_take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) {
-        let rentable = take_from_bag<T>(kiosk, item_id);
+    // public fun test_take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) {
+    public fun test_take_from_bag<T: key + store, Key: store + copy + drop>(kiosk: &mut Kiosk, item: Key) {
+        let rentable = take_from_bag<T, Key>(kiosk, item);
 
         let Rentable {            
                 object,
@@ -343,5 +359,10 @@ module nft_rental::rentables_ext {
             } = rentable;
 
         transfer::public_share_object(object);
+    }
+
+    #[test_only]
+    public fun create_listed(id: ID) : Listed {
+        Listed { id }
     }
 }
