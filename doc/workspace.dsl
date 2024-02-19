@@ -16,7 +16,7 @@ workspace {
                 delist = component "Delist" "Allows a renter to delist an item they are currenlty listing but not actively renting."
                 rent = component "Rent" "Allows a borrower to rent an item that is being listed in one's Rentables Extension."
                 borrow = component "Borrow" "Enables the borrower to borrow the item either by value of by reference. Depending on the configuration defined by the renter."
-                reclaim_rentable = component "Reclaim Rentable" "Allows the renter to claim their item after the rental period has expired."
+                reclaim = component "Reclaim" "Allows the renter to claim their item after the rental period has expired."
                 
                 # component relationships
                 item -> rentable "Is wrapped inside the"
@@ -24,14 +24,14 @@ workspace {
                 delist -> item "Releases the"
                 borrow -> item "Grants access temporarily to"
                 borrow -> promise "Produces a"
-                reclaim_rentable -> item "Releases the"
+                reclaim -> item "Releases the"
                 rentable -> rent "Is transferred to borrower's Kiosk Extension"
 
                 # person relationships
                 renter -> install "Invokes"
                 renter -> list "Invokes"
                 renter -> delist "Invokes"
-                renter -> reclaim_rentable "Invokes"
+                renter -> reclaim "Invokes"
                 borrower -> install "Invokes"
                 borrower -> rent "Invokes"
                 # rent -> borrower "Receives in Kiosk Extension"
