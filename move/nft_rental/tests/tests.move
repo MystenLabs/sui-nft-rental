@@ -25,11 +25,6 @@ module nft_rental::tests {
     struct T has key, store {id: UID}
     struct WITNESS has drop {}
 
-    struct PromiseWrapper has key, store {
-        id: UID,
-        promise: Promise
-    }
-
     // ==================== Tests ====================
     #[test]
     fun test_install_extension() {
@@ -525,7 +520,8 @@ module nft_rental::tests {
 
         rent(test, BORROWER, renter_kiosk_id, borrower_kiosk_id, item_id, 100, &clock);
 
-        borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
+        let promise = borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
+        return_val(test, promise, BORROWER, borrower_kiosk_id);
         
         clock::destroy_for_testing(clock);
         package::burn_publisher(publisher);
@@ -567,13 +563,10 @@ module nft_rental::tests {
 
             let (object, promise) = rentables_ext::borrow_val<T>(&mut kiosk, &kiosk_cap, item_id, test_scenario::ctx(test));
             
-            let promise_wrapper = PromiseWrapper {
-                id: object::new(test_scenario::ctx(test)),
-                promise
-            };
-
             transfer::public_transfer(object, BORROWER);
-            transfer::public_transfer(promise_wrapper, BORROWER);
+
+            return_val(test, promise, BORROWER, borrower_kiosk_id);
+
             test_scenario::return_shared(kiosk);
             test_scenario::return_to_sender(test, kiosk_cap);
         };
@@ -610,9 +603,9 @@ module nft_rental::tests {
 
         rent(test, BORROWER, renter_kiosk_id, borrower_kiosk_id, item_id, 100, &clock);
 
-        borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
+        let promise = borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
 
-        return_val(test, BORROWER, borrower_kiosk_id);
+        return_val(test, promise, BORROWER, borrower_kiosk_id);
 
         clock::destroy_for_testing(clock);
         package::burn_publisher(publisher);
@@ -647,11 +640,11 @@ module nft_rental::tests {
 
         rent(test, BORROWER, renter_kiosk_id, borrower_kiosk_id, item_id, 100, &clock);
 
-        borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
+        let promise = borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
 
         remove_ext(test, BORROWER, borrower_kiosk_id);
 
-        return_val(test, BORROWER, borrower_kiosk_id);
+        return_val(test, promise, BORROWER, borrower_kiosk_id);
 
         clock::destroy_for_testing(clock);
         package::burn_publisher(publisher);
@@ -686,9 +679,9 @@ module nft_rental::tests {
 
         rent(test, BORROWER, renter_kiosk_id, borrower_kiosk_id, item_id, 100, &clock);
 
-        borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
+        let promise = borrow_val(test, BORROWER, borrower_kiosk_id, item_id);
 
-        return_val(test, BORROWER, renter_kiosk_id);
+        return_val(test, promise, BORROWER, renter_kiosk_id);
 
         clock::destroy_for_testing(clock);
         package::burn_publisher(publisher);
@@ -1042,39 +1035,25 @@ module nft_rental::tests {
         };
     }
 
-    fun borrow_val(scenario: &mut Scenario, sender: address, kiosk_id: ID, item_id: ID) {
+    fun borrow_val(scenario: &mut Scenario, sender: address, kiosk_id: ID, item_id: ID): Promise {
         test_scenario::next_tx(scenario, sender);
-        {
-            let kiosk = test_scenario::take_shared_by_id<Kiosk>(scenario, kiosk_id);
-            let kiosk_cap = test_scenario::take_from_sender<KioskOwnerCap>(scenario);
+        let kiosk = test_scenario::take_shared_by_id<Kiosk>(scenario, kiosk_id);
+        let kiosk_cap = test_scenario::take_from_sender<KioskOwnerCap>(scenario);
 
-            let (object, promise) = rentables_ext::borrow_val<T>(&mut kiosk, &kiosk_cap, item_id, test_scenario::ctx(scenario));
-            
-            let promise_wrapper = PromiseWrapper {
-                id: object::new(test_scenario::ctx(scenario)),
-                promise
-            };
+        let (object, promise) = rentables_ext::borrow_val<T>(&mut kiosk, &kiosk_cap, item_id, test_scenario::ctx(scenario));
 
-            transfer::public_transfer(object, sender);
-            transfer::public_transfer(promise_wrapper, sender);
-            test_scenario::return_shared(kiosk);
-            test_scenario::return_to_sender(scenario, kiosk_cap);
-        };
+        transfer::public_transfer(object, sender);
+        test_scenario::return_shared(kiosk);
+        test_scenario::return_to_sender(scenario, kiosk_cap);
+        promise
     }
 
-    fun return_val(scenario: &mut Scenario, sender: address, kiosk_id: ID) {
+    fun return_val(scenario: &mut Scenario, promise: Promise, sender: address, kiosk_id: ID) {
         test_scenario::next_tx(scenario, sender);
         {
             let kiosk = test_scenario::take_shared_by_id<Kiosk>(scenario, kiosk_id);
             let object = test_scenario::take_from_sender<T>(scenario);
-            let promise_wrapper = test_scenario::take_from_sender<PromiseWrapper>(scenario);
-
-            let PromiseWrapper {
-                id,        
-                promise
-            } = promise_wrapper;
             
-            object::delete(id);
             rentables_ext::return_val(&mut kiosk, object, promise, test_scenario::ctx(scenario));
             test_scenario::return_shared(kiosk);
         };

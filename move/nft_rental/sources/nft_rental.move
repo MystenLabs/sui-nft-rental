@@ -54,7 +54,7 @@ module nft_rental::rentables_ext {
     struct Listed has store, copy, drop { id: ID }
 
     /// Promise struct for borrowing by value.
-    struct Promise has store {
+    struct Promise {
         item: Rented,
         duration: u64,
         start_date: u64,
